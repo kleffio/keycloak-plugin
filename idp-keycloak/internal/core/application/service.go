@@ -6,8 +6,8 @@ package application
 import (
 	"context"
 
-	"github.com/kleff/idp-keycloak/internal/core/domain"
-	"github.com/kleff/idp-keycloak/internal/core/ports"
+	"github.com/kleffio/idp-keycloak/internal/core/domain"
+	"github.com/kleffio/idp-keycloak/internal/core/ports"
 )
 
 // Service is the single use-case coordinator for the IDP plugin.

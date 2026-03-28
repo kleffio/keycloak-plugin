@@ -7,8 +7,8 @@ import (
 	"context"
 
 	pluginsv1 "github.com/kleffio/plugin-sdk/v1"
-	"github.com/kleff/idp-keycloak/internal/core/application"
-	"github.com/kleff/idp-keycloak/internal/core/domain"
+	"github.com/kleffio/idp-keycloak/internal/core/application"
+	"github.com/kleffio/idp-keycloak/internal/core/domain"
 )
 
 // Server implements all pluginsv1 server interfaces declared by this plugin.

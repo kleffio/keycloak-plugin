@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kleff/idp-keycloak/internal/core/domain"
+	"github.com/kleffio/idp-keycloak/internal/core/domain"
 )
 
 var (

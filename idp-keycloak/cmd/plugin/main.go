@@ -11,9 +11,9 @@ import (
 	"syscall"
 
 	pluginsv1 "github.com/kleffio/plugin-sdk/v1"
-	grpcadapter "github.com/kleff/idp-keycloak/internal/adapters/grpc"
-	"github.com/kleff/idp-keycloak/internal/adapters/keycloak"
-	"github.com/kleff/idp-keycloak/internal/core/application"
+	grpcadapter "github.com/kleffio/idp-keycloak/internal/adapters/grpc"
+	"github.com/kleffio/idp-keycloak/internal/adapters/keycloak"
+	"github.com/kleffio/idp-keycloak/internal/core/application"
 	"google.golang.org/grpc"
 )
 

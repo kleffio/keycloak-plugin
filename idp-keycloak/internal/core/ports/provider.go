@@ -5,7 +5,7 @@ package ports
 import (
 	"context"
 
-	"github.com/kleff/idp-keycloak/internal/core/domain"
+	"github.com/kleffio/idp-keycloak/internal/core/domain"
 )
 
 // IDPProvider is the outbound port through which the application talks to an

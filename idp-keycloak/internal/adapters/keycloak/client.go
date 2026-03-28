@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kleff/idp-keycloak/internal/core/domain"
+	"github.com/kleffio/idp-keycloak/internal/core/domain"
 )
 
 // Config holds the Keycloak connection parameters, loaded from env vars.
