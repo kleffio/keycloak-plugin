@@ -70,12 +70,25 @@ jobs:
               ref: "heads/main",
             });
 
-            await github.rest.git.createRef({
-              owner: "kleffio",
-              repo: "plugin-registry",
-              ref: `refs/heads/${branch}`,
-              sha: ref.object.sha,
-            });
+            // Create or reset branch
+            try {
+              await github.rest.git.createRef({
+                owner: "kleffio",
+                repo: "plugin-registry",
+                ref: `refs/heads/${branch}`,
+                sha: ref.object.sha,
+              });
+            } catch (e) {
+              if (e.status === 422) {
+                await github.rest.git.updateRef({
+                  owner: "kleffio",
+                  repo: "plugin-registry",
+                  ref: `heads/${branch}`,
+                  sha: ref.object.sha,
+                  force: true,
+                });
+              } else throw e;
+            }
 
             await github.rest.repos.createOrUpdateFileContents({
               owner: "kleffio",
