@@ -235,6 +235,87 @@ func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*domain
 	}, nil
 }
 
+// EnsureRealm creates the configured realm and kleff-panel client in Keycloak
+// if they do not already exist. Safe to call on every startup (idempotent).
+func (c *Client) EnsureRealm(ctx context.Context) error {
+	tok, err := c.adminToken(ctx)
+	if err != nil {
+		return fmt.Errorf("ensure realm: admin token: %w", err)
+	}
+
+	base := strings.TrimRight(c.cfg.BaseURL, "/")
+
+	// Check if realm exists.
+	realmURL := fmt.Sprintf("%s/admin/realms/%s", base, c.cfg.Realm)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, realmURL, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("ensure realm: check realm: %w", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Create realm.
+		payload, _ := json.Marshal(map[string]any{
+			"realm":                 c.cfg.Realm,
+			"enabled":               true,
+			"registrationAllowed":   true,
+			"loginWithEmailAllowed": true,
+		})
+		req, _ = http.NewRequestWithContext(ctx, http.MethodPost, base+"/admin/realms",
+			strings.NewReader(string(payload)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err = c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("ensure realm: create realm: %w", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("ensure realm: create realm: status %d", resp.StatusCode)
+		}
+	}
+
+	// Check if kleff-panel client exists.
+	clientsURL := fmt.Sprintf("%s/admin/realms/%s/clients?clientId=%s", base, c.cfg.Realm, c.cfg.ClientID)
+	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, clientsURL, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err = c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("ensure realm: check client: %w", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var clients []map[string]any
+	if err := json.Unmarshal(body, &clients); err != nil || len(clients) == 0 {
+		// Create client.
+		payload, _ := json.Marshal(map[string]any{
+			"clientId":                  c.cfg.ClientID,
+			"enabled":                   true,
+			"publicClient":              true,
+			"directAccessGrantsEnabled": true,
+			"standardFlowEnabled":       false,
+		})
+		req, _ = http.NewRequestWithContext(ctx, http.MethodPost,
+			fmt.Sprintf("%s/admin/realms/%s/clients", base, c.cfg.Realm),
+			strings.NewReader(string(payload)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err = c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("ensure realm: create client: %w", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("ensure realm: create client: status %d", resp.StatusCode)
+		}
+	}
+
+	return nil
+}
+
 func (c *Client) adminToken(ctx context.Context) (string, error) {
 	endpoint := fmt.Sprintf("%s/realms/master/protocol/openid-connect/token",
 		strings.TrimRight(c.cfg.BaseURL, "/"))

@@ -21,55 +21,42 @@
     {
       "key": "KEYCLOAK_URL",
       "label": "Keycloak URL",
-      "description": "Root URL of your Keycloak server, e.g. https://keycloak.example.com",
+      "description": "Leave blank to use the bundled Keycloak. Set this to connect to your own existing Keycloak server instead.",
       "type": "url",
-      "required": true
+      "required": false
     },
     {
       "key": "KEYCLOAK_REALM",
       "label": "Realm",
-      "description": "Keycloak realm name, e.g. kleff",
+      "description": "Realm name on your Keycloak server. Only needed when connecting to an external Keycloak.",
       "type": "string",
-      "required": true,
-      "default": "master"
-    },
-    {
-      "key": "KEYCLOAK_CLIENT_ID",
-      "label": "Client ID",
-      "description": "Confidential client with Direct Access Grants enabled.",
-      "type": "string",
-      "required": true,
-      "default": "kleff-panel"
-    },
-    {
-      "key": "KEYCLOAK_CLIENT_SECRET",
-      "label": "Client Secret",
-      "description": "Client secret for the above client.",
-      "type": "secret",
       "required": false
-    },
-    {
-      "key": "KEYCLOAK_ADMIN_USER",
-      "label": "Admin Username",
-      "description": "Keycloak admin username (used for user registration).",
-      "type": "string",
-      "required": false,
-      "default": "admin"
     },
     {
       "key": "KEYCLOAK_ADMIN_PASSWORD",
       "label": "Admin Password",
+      "description": "Admin password for your Keycloak server. Only needed when connecting to an external Keycloak.",
       "type": "secret",
       "required": false
-    },
+    }
+  ],
+  "companions": [
     {
-      "key": "AUTH_MODE",
-      "label": "Login Mode",
-      "description": "headless — users log in via the Kleff panel form (uses Keycloak Direct Access Grants). redirect — users are redirected to the Keycloak login page via OIDC Authorization Code flow.",
-      "type": "select",
-      "options": ["headless", "redirect"],
-      "required": false,
-      "default": "headless"
+      "id": "keycloak",
+      "image": "quay.io/keycloak/keycloak:26.1",
+      "command": ["start-dev"],
+      "env": {
+        "KC_BOOTSTRAP_ADMIN_USERNAME": "admin",
+        "KC_BOOTSTRAP_ADMIN_PASSWORD": "admin",
+        "KC_HTTP_PORT": "8080"
+      },
+      "volumes": [
+        {
+          "name": "kleff-keycloak-data",
+          "target": "/opt/keycloak/data"
+        }
+      ],
+      "skipIfEnv": "KEYCLOAK_URL"
     }
   ]
 }
