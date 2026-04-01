@@ -3,7 +3,7 @@ module github.com/kleffio/idp-keycloak
 go 1.25.0
 
 require (
-	github.com/kleffio/plugin-sdk v0.1.0
+	github.com/kleffio/plugin-sdk-go v0.1.1
 	google.golang.org/grpc v1.64.0
 )
 

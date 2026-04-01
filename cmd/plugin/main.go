@@ -3,14 +3,15 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	pluginsv1 "github.com/kleffio/plugin-sdk/v1"
+	pluginsv1 "github.com/kleffio/plugin-sdk-go/v1"
 	grpcadapter "github.com/kleffio/idp-keycloak/internal/adapters/grpc"
 	"github.com/kleffio/idp-keycloak/internal/adapters/keycloak"
 	"github.com/kleffio/idp-keycloak/internal/core/application"
@@ -21,16 +22,35 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// ── Infrastructure (outbound adapter) ─────────────────────────────────────
+	// Defaults match the bundled Keycloak companion container (id: "keycloak").
+	// Override via env vars to connect to an external Keycloak instead.
 	provider := keycloak.New(keycloak.Config{
-		BaseURL:       mustEnv("KEYCLOAK_URL"),
+		BaseURL:       env("KEYCLOAK_URL", "http://keycloak:8080"),
 		PublicBaseURL: env("KEYCLOAK_PUBLIC_URL", ""),
 		Realm:         env("KEYCLOAK_REALM", "master"),
 		ClientID:      env("KEYCLOAK_CLIENT_ID", "kleff-panel"),
 		ClientSecret:  env("KEYCLOAK_CLIENT_SECRET", ""),
 		AdminUser:     env("KEYCLOAK_ADMIN_USER", "admin"),
-		AdminPassword: env("KEYCLOAK_ADMIN_PASSWORD", ""),
+		AdminPassword: env("KEYCLOAK_ADMIN_PASSWORD", "admin"),
 		AuthMode:      env("AUTH_MODE", "headless"),
 	})
+
+	// ── Ensure Keycloak realm is configured (retry until Keycloak is ready) ───
+	setupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for {
+		if err := provider.EnsureRealm(setupCtx); err == nil {
+			break
+		} else {
+			logger.Warn("waiting for Keycloak to be ready...", "error", err)
+		}
+		select {
+		case <-setupCtx.Done():
+			logger.Error("timed out waiting for Keycloak to be ready")
+			os.Exit(1)
+		case <-time.After(5 * time.Second):
+		}
+	}
 
 	// ── Application layer ──────────────────────────────────────────────────────
 	svc := application.New(provider)
@@ -72,11 +92,3 @@ func env(key, def string) string {
 	return def
 }
 
-func mustEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		fmt.Fprintf(os.Stderr, "required env var %s is not set\n", key)
-		os.Exit(1)
-	}
-	return v
-}
