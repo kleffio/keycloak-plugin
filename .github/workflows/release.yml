@@ -9,7 +9,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
 
     steps:
@@ -27,83 +27,6 @@ jobs:
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Generate app token for self
-        id: self-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.KLEFF_APP_ID }}
-          private-key: ${{ secrets.KLEFF_APP_PRIVATE_KEY }}
-          owner: kleffio
-          repositories: keycloak-plugin
-
-      - name: Bump version in kleff-plugin.json
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.self-token.outputs.token }}
-          script: |
-            const version = "${{ steps.version.outputs.version }}";
-            const branch = `chore/bump-version-${version}`;
-
-            const { data: file } = await github.rest.repos.getContent({
-              owner: "kleffio",
-              repo: "keycloak-plugin",
-              path: "kleff-plugin.json",
-            });
-
-            const manifest = JSON.parse(Buffer.from(file.content, "base64").toString());
-            manifest.version = version;
-
-            const { data: ref } = await github.rest.git.getRef({
-              owner: "kleffio",
-              repo: "keycloak-plugin",
-              ref: "heads/main",
-            });
-
-            try {
-              await github.rest.git.createRef({
-                owner: "kleffio",
-                repo: "keycloak-plugin",
-                ref: `refs/heads/${branch}`,
-                sha: ref.object.sha,
-              });
-            } catch (e) {
-              if (e.status === 422) {
-                await github.rest.git.updateRef({
-                  owner: "kleffio",
-                  repo: "keycloak-plugin",
-                  ref: `heads/${branch}`,
-                  sha: ref.object.sha,
-                  force: true,
-                });
-              } else throw e;
-            }
-
-            await github.rest.repos.createOrUpdateFileContents({
-              owner: "kleffio",
-              repo: "keycloak-plugin",
-              path: "kleff-plugin.json",
-              message: `chore: bump version to ${version}`,
-              content: Buffer.from(JSON.stringify(manifest, null, 2) + "\n").toString("base64"),
-              branch,
-              sha: file.sha,
-            });
-
-            const { data: pr } = await github.rest.pulls.create({
-              owner: "kleffio",
-              repo: "keycloak-plugin",
-              title: `chore: bump version to ${version}`,
-              head: branch,
-              base: "main",
-              body: `Automated version bump from release tag \`v${version}\`.`,
-            });
-
-            await github.rest.pulls.merge({
-              owner: "kleffio",
-              repo: "keycloak-plugin",
-              pull_number: pr.number,
-              merge_method: "squash",
-            });
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
