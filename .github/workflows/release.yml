@@ -9,11 +9,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -34,6 +36,11 @@ jobs:
           tags: |
             ghcr.io/kleffio/idp-keycloak:${{ steps.version.outputs.version }}
             ghcr.io/kleffio/idp-keycloak:latest
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
 
       - name: Generate app token
         id: app-token

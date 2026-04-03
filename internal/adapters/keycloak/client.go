@@ -383,7 +383,8 @@ func (c *Client) EnsureAdmin(ctx context.Context) error {
 		resp.Body.Close()
 	}
 
-	// Seed the admin user (ignore conflict — user already exists).
+	// Seed the admin user. On conflict the user already exists (e.g. Keycloak 26
+	// bootstrap admin) — reset their password so a proper OIDC credential exists.
 	_, err = c.Register(ctx, domain.RegisterRequest{
 		Username:  c.cfg.AdminUser,
 		Password:  c.cfg.AdminPassword,
@@ -392,7 +393,11 @@ func (c *Client) EnsureAdmin(ctx context.Context) error {
 		LastName:  "Account",
 	})
 	if err != nil {
-		if _, ok := err.(*domain.ErrConflict); !ok {
+		if _, ok := err.(*domain.ErrConflict); ok {
+			if err := c.resetPassword(ctx, tok, base, c.cfg.AdminUser, c.cfg.AdminPassword); err != nil {
+				return fmt.Errorf("ensure admin: reset password: %w", err)
+			}
+		} else {
 			return fmt.Errorf("ensure admin: seed admin user: %w", err)
 		}
 	}
@@ -442,6 +447,46 @@ func (c *Client) assignAdminRole(ctx context.Context, tok, base string) error {
 		return err
 	}
 	resp.Body.Close()
+	return nil
+}
+
+// resetPassword sets a new permanent password credential on an existing user.
+func (c *Client) resetPassword(ctx context.Context, tok, base, username, password string) error {
+	// Look up the user ID by username.
+	userURL := fmt.Sprintf("%s/admin/realms/%s/users?username=%s&exact=true", base, c.cfg.Realm, username)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, userURL, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var users []map[string]any
+	if err := json.Unmarshal(body, &users); err != nil || len(users) == 0 {
+		return fmt.Errorf("user %q not found", username)
+	}
+	userID, _ := users[0]["id"].(string)
+
+	// Set a permanent password credential.
+	payload, _ := json.Marshal(map[string]any{
+		"type":      "password",
+		"value":     password,
+		"temporary": false,
+	})
+	pwURL := fmt.Sprintf("%s/admin/realms/%s/users/%s/reset-password", base, c.cfg.Realm, userID)
+	req, _ = http.NewRequestWithContext(ctx, http.MethodPut, pwURL, strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err = c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("reset-password: unexpected status %d", resp.StatusCode)
+	}
 	return nil
 }
 
