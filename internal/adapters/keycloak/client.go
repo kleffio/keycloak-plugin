@@ -294,15 +294,21 @@ func (c *Client) EnsureRealm(ctx context.Context) error {
 	resp.Body.Close()
 
 	var clients []map[string]any
-	if err := json.Unmarshal(body, &clients); err != nil || len(clients) == 0 {
+	_ = json.Unmarshal(body, &clients)
+
+	clientPayload := map[string]any{
+		"clientId":                  c.cfg.ClientID,
+		"enabled":                   true,
+		"publicClient":              true,
+		"directAccessGrantsEnabled": true,
+		"standardFlowEnabled":       true,
+		"redirectUris":              []string{"*"},
+		"webOrigins":                []string{"*"},
+	}
+
+	if len(clients) == 0 {
 		// Create client.
-		payload, _ := json.Marshal(map[string]any{
-			"clientId":                  c.cfg.ClientID,
-			"enabled":                   true,
-			"publicClient":              true,
-			"directAccessGrantsEnabled": true,
-			"standardFlowEnabled":       false,
-		})
+		payload, _ := json.Marshal(clientPayload)
 		req, _ = http.NewRequestWithContext(ctx, http.MethodPost,
 			fmt.Sprintf("%s/admin/realms/%s/clients", base, c.cfg.Realm),
 			strings.NewReader(string(payload)))
@@ -315,6 +321,21 @@ func (c *Client) EnsureRealm(ctx context.Context) error {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusCreated {
 			return fmt.Errorf("ensure realm: create client: status %d", resp.StatusCode)
+		}
+	} else {
+		// Update existing client to ensure standard flow and redirect URIs are set.
+		if clientID, _ := clients[0]["id"].(string); clientID != "" {
+			payload, _ := json.Marshal(clientPayload)
+			req, _ = http.NewRequestWithContext(ctx, http.MethodPut,
+				fmt.Sprintf("%s/admin/realms/%s/clients/%s", base, c.cfg.Realm, clientID),
+				strings.NewReader(string(payload)))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+tok)
+			resp, err = c.http.Do(req)
+			if err != nil {
+				return fmt.Errorf("ensure realm: update client: %w", err)
+			}
+			resp.Body.Close()
 		}
 	}
 
