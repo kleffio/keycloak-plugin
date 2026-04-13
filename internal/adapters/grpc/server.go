@@ -117,6 +117,39 @@ func (s *Server) EnsureAdmin(ctx context.Context, _ *pluginsv1.EnsureAdminReques
 	return &pluginsv1.EnsureAdminResponse{}, nil
 }
 
+func (s *Server) ChangePassword(ctx context.Context, req *pluginsv1.ChangePasswordRequest) (*pluginsv1.ChangePasswordResponse, error) {
+	if err := s.svc.ChangePassword(ctx, req.UserID, req.CurrentPassword, req.NewPassword); err != nil {
+		return &pluginsv1.ChangePasswordResponse{Error: toPluginError(err)}, nil
+	}
+	return &pluginsv1.ChangePasswordResponse{}, nil
+}
+
+func (s *Server) ListSessions(ctx context.Context, req *pluginsv1.ListSessionsRequest) (*pluginsv1.ListSessionsResponse, error) {
+	sessions, err := s.svc.ListSessions(ctx, req.UserID)
+	if err != nil {
+		return &pluginsv1.ListSessionsResponse{Error: toPluginError(err)}, nil
+	}
+	res := make([]*pluginsv1.Session, len(sessions))
+	for i, sess := range sessions {
+		res[i] = &pluginsv1.Session{
+			ID:          sess.ID,
+			IPAddress:   sess.IPAddress,
+			UserAgent:   sess.Browser,
+			StartedAt:   sess.Started,
+			LastAccess:  sess.LastSeen,
+			Current:     sess.ID == req.CurrentSessionID,
+		}
+	}
+	return &pluginsv1.ListSessionsResponse{Sessions: res}, nil
+}
+
+func (s *Server) RevokeSession(ctx context.Context, req *pluginsv1.RevokeSessionRequest) (*pluginsv1.RevokeSessionResponse, error) {
+	if err := s.svc.RevokeSession(ctx, req.SessionID); err != nil {
+		return &pluginsv1.RevokeSessionResponse{Error: toPluginError(err)}, nil
+	}
+	return &pluginsv1.RevokeSessionResponse{}, nil
+}
+
 // ── PluginUI ──────────────────────────────────────────────────────────────────
 
 func (s *Server) GetUIManifest(_ context.Context, _ *pluginsv1.GetUIManifestRequest) (*pluginsv1.GetUIManifestResponse, error) {
@@ -130,6 +163,14 @@ func (s *Server) GetUIManifest(_ context.Context, _ *pluginsv1.GetUIManifestRequ
 					Label:     "Identity Provider",
 					Path:      "/settings/identity",
 					IframeURL: adminURL + "/admin",
+				},
+			},
+			ProfileSections: []*pluginsv1.ProfileSection{
+				{
+					ID:          "keycloak-security",
+					Title:       "Security",
+					Description: "Change your password and manage active sessions.",
+					Actions:     []string{"change_password", "list_sessions", "revoke_session"},
 				},
 			},
 		},

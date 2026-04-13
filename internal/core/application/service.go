@@ -50,3 +50,18 @@ func (s *Service) EnsureAdmin(ctx context.Context) error {
 	return s.provider.EnsureAdmin(ctx)
 }
 
+// ChangePassword verifies the current password then sets the new one.
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	return s.provider.ChangePassword(ctx, userID, currentPassword, newPassword)
+}
+
+// ListSessions returns all active sessions for a user.
+func (s *Service) ListSessions(ctx context.Context, userID string) ([]*domain.Session, error) {
+	return s.provider.ListSessions(ctx, userID)
+}
+
+// RevokeSession revokes a specific session.
+func (s *Service) RevokeSession(ctx context.Context, sessionID string) error {
+	return s.provider.RevokeSession(ctx, sessionID)
+}
+

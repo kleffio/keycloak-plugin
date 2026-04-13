@@ -36,3 +36,13 @@ type RegisterRequest struct {
 	FirstName string
 	LastName  string
 }
+
+// Session represents an active user session.
+type Session struct {
+	ID        string
+	IPAddress string
+	Browser   string
+	Started   int64
+	LastSeen  int64
+	Current   bool
+}

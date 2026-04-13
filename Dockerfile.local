@@ -1,0 +1,23 @@
+FROM golang:1.25-alpine AS builder
+WORKDIR /build
+
+# Copy the local plugin-sdk-go so we can use a replace directive
+COPY plugin-sdk-go/ /plugin-sdk-go/
+
+COPY keycloak-plugin/go.mod keycloak-plugin/go.sum* ./
+RUN go mod download 2>/dev/null || true
+
+COPY keycloak-plugin/ .
+RUN go mod edit -replace github.com/kleffio/plugin-sdk-go=/plugin-sdk-go \
+    && go mod tidy \
+    && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /plugin ./cmd/plugin
+
+# ── Runtime image ─────────────────────────────────────────────────────────────
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY --from=builder /plugin /plugin
+
+ENV PLUGIN_PORT=50051
+EXPOSE 50051
+ENTRYPOINT ["/plugin"]

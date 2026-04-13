@@ -33,4 +33,14 @@ type IDPProvider interface {
 	// EnsureAdmin seeds the admin user and assigns the "admin" realm role.
 	// Idempotent — safe to call on every startup or on demand.
 	EnsureAdmin(ctx context.Context) error
+
+	// ChangePassword verifies currentPassword for userID, then sets newPassword.
+	// Returns ErrUnauthorized if currentPassword is wrong.
+	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error
+
+	// ListSessions returns all active sessions for a user.
+	ListSessions(ctx context.Context, userID string) ([]*domain.Session, error)
+
+	// RevokeSession revokes a specific session.
+	RevokeSession(ctx context.Context, sessionID string) error
 }

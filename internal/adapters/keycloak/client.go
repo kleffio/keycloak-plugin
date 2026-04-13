@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kleffio/idp-keycloak/internal/core/domain"
+	pluginsv1 "github.com/kleffio/plugin-sdk-go/v1"
 )
 
 // Config holds the Keycloak connection parameters, loaded from env vars.
@@ -29,15 +30,22 @@ type Config struct {
 
 // Client is the production implementation of ports.IDPProvider.
 type Client struct {
-	cfg  Config
-	http *http.Client
+	cfg       Config
+	http      *http.Client
+	validator *pluginsv1.JWTValidator
 }
 
 // New creates a Keycloak client. Call this once at startup.
+// The JWKS URL is derived from cfg.BaseURL and cfg.Realm; the validator is
+// initialised here so each Client instance has its own key cache and
+// revocation set (no package-level globals).
 func New(cfg Config) *Client {
+	jwksURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs",
+		strings.TrimRight(cfg.BaseURL, "/"), cfg.Realm)
 	return &Client{
-		cfg:  cfg,
-		http: &http.Client{Timeout: 15 * time.Second},
+		cfg:       cfg,
+		http:      &http.Client{Timeout: 15 * time.Second},
+		validator: pluginsv1.NewJWTValidator(jwksURL),
 	}
 }
 
@@ -257,7 +265,20 @@ func (c *Client) EnsureRealm(ctx context.Context) error {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// realm already exists
+		// realm already exists, update settings for longer sessions
+		payload, _ := json.Marshal(map[string]any{
+			"ssoSessionIdleTimeout": 86400,
+			"ssoSessionMaxLifespan": 86400,
+			"accessTokenLifespan":   300,
+		})
+		req, _ = http.NewRequestWithContext(ctx, http.MethodPut, base+"/admin/realms/"+c.cfg.Realm,
+			strings.NewReader(string(payload)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		updateResp, err := c.http.Do(req)
+		if err == nil {
+			updateResp.Body.Close()
+		}
 	case http.StatusNotFound:
 		// Create realm.
 		payload, _ := json.Marshal(map[string]any{
@@ -265,6 +286,9 @@ func (c *Client) EnsureRealm(ctx context.Context) error {
 			"enabled":               true,
 			"registrationAllowed":   true,
 			"loginWithEmailAllowed": true,
+			"ssoSessionIdleTimeout": 86400,
+			"ssoSessionMaxLifespan": 86400,
+			"accessTokenLifespan":   300,
 		})
 		req, _ = http.NewRequestWithContext(ctx, http.MethodPost, base+"/admin/realms",
 			strings.NewReader(string(payload)))
@@ -384,8 +408,7 @@ func (c *Client) EnsureAdmin(ctx context.Context) error {
 		resp.Body.Close()
 	}
 
-	// Seed the admin user. On conflict the user already exists (e.g. Keycloak 26
-	// bootstrap admin) — reset their password so a proper OIDC credential exists.
+	// Seed the admin user. If they exist, do not overwrite their password.
 	_, err = c.Register(ctx, domain.RegisterRequest{
 		Username:  c.cfg.AdminUser,
 		Password:  c.cfg.AdminPassword,
@@ -394,11 +417,7 @@ func (c *Client) EnsureAdmin(ctx context.Context) error {
 		LastName:  "Account",
 	})
 	if err != nil {
-		if _, ok := err.(*domain.ErrConflict); ok {
-			if err := c.resetPassword(ctx, tok, base, c.cfg.AdminUser, c.cfg.AdminPassword); err != nil {
-				return fmt.Errorf("ensure admin: reset password: %w", err)
-			}
-		} else {
+		if _, ok := err.(*domain.ErrConflict); !ok {
 			return fmt.Errorf("ensure admin: seed admin user: %w", err)
 		}
 	}
@@ -491,6 +510,81 @@ func (c *Client) resetPassword(ctx context.Context, tok, base, username, passwor
 	return nil
 }
 
+// ChangePassword verifies userID's current password via ROPC, then uses the
+// admin API to set the new password. userID is the Keycloak user UUID (sub claim).
+func (c *Client) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	base := strings.TrimRight(c.cfg.BaseURL, "/")
+
+	// Step 1: look up username by UUID so we can verify via ROPC.
+	adminTok, err := c.adminToken(ctx)
+	if err != nil {
+		return fmt.Errorf("change password: get admin token: %w", err)
+	}
+	userURL := fmt.Sprintf("%s/admin/realms/%s/users/%s", base, c.cfg.Realm, userID)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, userURL, nil)
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("change password: fetch user: %w", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("change password: user not found (status %d)", resp.StatusCode)
+	}
+	var userObj struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(body, &userObj); err != nil || userObj.Username == "" {
+		return fmt.Errorf("change password: could not parse user")
+	}
+
+	// Step 2: verify current password via ROPC.
+	data := url.Values{
+		"grant_type": {"password"},
+		"client_id":  {c.cfg.ClientID},
+		"username":   {userObj.Username},
+		"password":   {currentPassword},
+	}
+	if c.cfg.ClientSecret != "" {
+		data.Set("client_secret", c.cfg.ClientSecret)
+	}
+	req, _ = http.NewRequestWithContext(ctx, http.MethodPost, c.tokenEndpoint(), strings.NewReader(data.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err = c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("change password: verify current password: %w", err)
+	}
+	var tokResp struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&tokResp)
+	resp.Body.Close()
+	if tokResp.Error != "" {
+		return &domain.ErrUnauthorized{Msg: "current password is incorrect"}
+	}
+
+	// Step 3: set new password via admin API.
+	payload, _ := json.Marshal(map[string]any{
+		"type":      "password",
+		"value":     newPassword,
+		"temporary": false,
+	})
+	pwURL := fmt.Sprintf("%s/admin/realms/%s/users/%s/reset-password", base, c.cfg.Realm, userID)
+	req, _ = http.NewRequestWithContext(ctx, http.MethodPut, pwURL, strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	resp, err = c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("change password: reset-password: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("change password: reset-password unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (c *Client) adminToken(ctx context.Context) (string, error) {
 	endpoint := fmt.Sprintf("%s/realms/master/protocol/openid-connect/token",
 		strings.TrimRight(c.cfg.BaseURL, "/"))
@@ -526,4 +620,97 @@ func (c *Client) adminToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("keycloak admin token: %s", tok.Error)
 	}
 	return tok.AccessToken, nil
+}
+// ListSessions returns all active sessions for a user.
+func (c *Client) ListSessions(ctx context.Context, userID string) ([]*domain.Session, error) {
+	tok, err := c.adminToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: admin token: %w", err)
+	}
+
+	base := strings.TrimRight(c.cfg.BaseURL, "/")
+	sessionsURL := fmt.Sprintf("%s/admin/realms/%s/users/%s/sessions", base, c.cfg.Realm, userID)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, sessionsURL, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return []*domain.Session{}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list sessions: unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var kcSessions []struct {
+		ID        string `json:"id"`
+		IPAddress string `json:"ipAddress"`
+		Start     int64  `json:"start"`
+		LastAccess int64 `json:"lastAccess"`
+		Clients   map[string]string `json:"clients"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&kcSessions); err != nil {
+		return nil, fmt.Errorf("list sessions: decode response: %w", err)
+	}
+
+	sessions := make([]*domain.Session, 0, len(kcSessions))
+	for _, s := range kcSessions {
+		// Attempt to derive a "browser" or "client" string based on the client ID.
+		browser := "Keycloak Session"
+		if len(s.Clients) > 0 {
+			var clientIDs []string
+			for _, cid := range s.Clients {
+				clientIDs = append(clientIDs, cid)
+			}
+			if len(clientIDs) > 0 {
+				browser = clientIDs[0]
+			}
+		}
+
+		sessions = append(sessions, &domain.Session{
+			ID:        s.ID,
+			IPAddress: s.IPAddress,
+			Browser:   browser,
+			Started:   s.Start,
+			LastSeen:  s.LastAccess,
+			Current:   false, // Set by handler logic if match ID
+		})
+	}
+	return sessions, nil
+}
+
+// RevokeSession revokes a specific session.
+func (c *Client) RevokeSession(ctx context.Context, sessionID string) error {
+	tok, err := c.adminToken(ctx)
+	if err != nil {
+		return fmt.Errorf("revoke session: admin token: %w", err)
+	}
+
+	base := strings.TrimRight(c.cfg.BaseURL, "/")
+	deleteURL := fmt.Sprintf("%s/admin/realms/%s/sessions/%s", base, c.cfg.Realm, sessionID)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("revoke session: do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("revoke session: unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Mark the session revoked in-process so that any still-valid JWTs
+	// carrying this sid are rejected immediately, without waiting for their
+	// exp claim to elapse. TTL is set to 10 minutes — well above the typical
+	// 5-minute Keycloak access-token lifetime — to cover clock skew.
+	c.validator.RevokeSession(sessionID, 10*time.Minute)
+	return nil
 }
