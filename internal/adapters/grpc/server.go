@@ -94,11 +94,14 @@ func (s *Server) GetOIDCConfig(_ context.Context, _ *pluginsv1.GetOIDCConfigRequ
 	cfg := s.svc.OIDCConfig()
 	return &pluginsv1.GetOIDCConfigResponse{
 		Config: &pluginsv1.OIDCConfig{
-			Authority: cfg.Authority,
-			ClientID:  cfg.ClientID,
-			JwksURI:   cfg.JwksURI,
-			Scopes:    []string{"openid", "profile", "email"},
-			AuthMode:  cfg.AuthMode,
+			Authority:             cfg.Authority,
+			ClientID:              cfg.ClientID,
+			JwksURI:               cfg.JwksURI,
+			Scopes:                []string{"openid", "profile", "email"},
+			AuthMode:              cfg.AuthMode,
+			TokenEndpoint:         cfg.TokenEndpoint,
+			InternalTokenEndpoint: cfg.InternalTokenEndpoint,
+			EndSessionEndpoint:    cfg.EndSessionEndpoint,
 		},
 	}, nil
 }
@@ -145,7 +148,7 @@ func (s *Server) ListSessions(ctx context.Context, req *pluginsv1.ListSessionsRe
 }
 
 func (s *Server) RevokeSession(ctx context.Context, req *pluginsv1.RevokeSessionRequest) (*pluginsv1.RevokeSessionResponse, error) {
-	if err := s.svc.RevokeSession(ctx, req.SessionID); err != nil {
+	if err := s.svc.RevokeSession(ctx, req.UserID, req.SessionID); err != nil {
 		return &pluginsv1.RevokeSessionResponse{Error: toPluginError(err)}, nil
 	}
 	return &pluginsv1.RevokeSessionResponse{}, nil

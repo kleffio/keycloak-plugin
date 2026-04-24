@@ -42,5 +42,6 @@ type IDPProvider interface {
 	ListSessions(ctx context.Context, userID string) ([]*domain.Session, error)
 
 	// RevokeSession revokes a specific session.
-	RevokeSession(ctx context.Context, sessionID string) error
+	// userID is verified to own the session before deletion.
+	RevokeSession(ctx context.Context, userID, sessionID string) error
 }

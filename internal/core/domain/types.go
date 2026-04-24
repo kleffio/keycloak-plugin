@@ -22,11 +22,14 @@ type TokenClaims struct {
 
 // OIDCConfig holds the OIDC discovery parameters the frontend needs to bootstrap.
 type OIDCConfig struct {
-	Authority string // browser-reachable issuer URL
-	ClientID  string
-	JwksURI   string
-	Realm     string // Keycloak realm name, used to derive admin console URL
-	AuthMode  string // "headless" (default) or "redirect"
+	Authority             string // browser-reachable issuer URL
+	ClientID              string
+	JwksURI               string
+	Realm                 string // Keycloak realm name, used to derive admin console URL
+	AuthMode              string // "headless" (default) or "redirect"
+	TokenEndpoint         string // public token endpoint (browser-reachable)
+	InternalTokenEndpoint string // Docker-internal token endpoint for server-side proxy
+	EndSessionEndpoint    string // public end-session (logout) endpoint
 }
 
 // RegisterRequest holds the fields required to create a new user.
