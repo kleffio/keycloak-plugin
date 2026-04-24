@@ -60,8 +60,8 @@ func (s *Service) ListSessions(ctx context.Context, userID string) ([]*domain.Se
 	return s.provider.ListSessions(ctx, userID)
 }
 
-// RevokeSession revokes a specific session.
-func (s *Service) RevokeSession(ctx context.Context, sessionID string) error {
-	return s.provider.RevokeSession(ctx, sessionID)
+// RevokeSession revokes a specific session after verifying ownership.
+func (s *Service) RevokeSession(ctx context.Context, userID, sessionID string) error {
+	return s.provider.RevokeSession(ctx, userID, sessionID)
 }
 

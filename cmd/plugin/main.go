@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/kleffio/idp-keycloak/internal/adapters/keycloak"
 	"github.com/kleffio/idp-keycloak/internal/core/application"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func main() {
@@ -33,6 +35,7 @@ func main() {
 		AdminUser:     env("KEYCLOAK_ADMIN_USER", "admin"),
 		AdminPassword: env("KEYCLOAK_ADMIN_PASSWORD", "admin"),
 		AuthMode:      env("AUTH_MODE", "headless"),
+		PanelURL:      env("PANEL_URL", ""),
 	})
 
 	// ── Ensure Keycloak realm is configured (retry until Keycloak is ready) ───
@@ -58,7 +61,21 @@ func main() {
 	// ── Inbound adapter (gRPC) ─────────────────────────────────────────────────
 	srv := grpcadapter.New(svc)
 
-	gs := grpc.NewServer()
+	var serverOpts []grpc.ServerOption
+	if certPEM := env("PLUGIN_TLS_CERT_PEM", ""); certPEM != "" {
+		keyPEM := env("PLUGIN_TLS_KEY_PEM", "")
+		cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+		if err != nil {
+			logger.Error("invalid TLS cert/key", "error", err)
+			os.Exit(1)
+		}
+		serverOpts = append(serverOpts, grpc.Creds(credentials.NewTLS(&tls.Config{
+			Certificates: []tls.Certificate{cert},
+		})))
+		logger.Info("gRPC server configured with mTLS")
+	}
+
+	gs := grpc.NewServer(serverOpts...)
 	pluginsv1.RegisterIdentityPluginServer(gs, srv)
 	pluginsv1.RegisterPluginHealthServer(gs, srv)
 	pluginsv1.RegisterPluginUIServer(gs, srv)

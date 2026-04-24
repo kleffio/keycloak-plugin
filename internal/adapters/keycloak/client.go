@@ -26,6 +26,7 @@ type Config struct {
 	AdminUser     string
 	AdminPassword string
 	AuthMode      string // "headless" (default) or "redirect"
+	PanelURL      string // public panel URL, e.g. "https://panel.example.com"; used to register the OIDC callback
 }
 
 // Client is the production implementation of ports.IDPProvider.
@@ -177,12 +178,17 @@ func (c *Client) OIDCConfig() domain.OIDCConfig {
 	if authMode == "" {
 		authMode = "headless"
 	}
+	internal := strings.TrimRight(c.cfg.BaseURL, "/")
+	base := fmt.Sprintf("%s/realms/%s/protocol/openid-connect", public, c.cfg.Realm)
 	return domain.OIDCConfig{
-		Authority: fmt.Sprintf("%s/realms/%s", public, c.cfg.Realm),
-		ClientID:  c.cfg.ClientID,
-		JwksURI:   fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", public, c.cfg.Realm),
-		Realm:     c.cfg.Realm,
-		AuthMode:  authMode,
+		Authority:             fmt.Sprintf("%s/realms/%s", public, c.cfg.Realm),
+		ClientID:              c.cfg.ClientID,
+		JwksURI:               base + "/certs",
+		Realm:                 c.cfg.Realm,
+		AuthMode:              authMode,
+		TokenEndpoint:         base + "/token",
+		InternalTokenEndpoint: fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", internal, c.cfg.Realm),
+		EndSessionEndpoint:    base + "/logout",
 	}
 }
 
@@ -320,14 +326,23 @@ func (c *Client) EnsureRealm(ctx context.Context) error {
 	var clients []map[string]any
 	_ = json.Unmarshal(body, &clients)
 
+	redirectURIs := []string{"http://localhost/callback"}
+	webOrigins := []string{"http://localhost"}
+	if panelURL := strings.TrimRight(c.cfg.PanelURL, "/"); panelURL != "" {
+		redirectURIs = append(redirectURIs, panelURL+"/auth/callback")
+		if u, err := url.Parse(panelURL); err == nil {
+			origin := u.Scheme + "://" + u.Host
+			webOrigins = append(webOrigins, origin)
+		}
+	}
 	clientPayload := map[string]any{
 		"clientId":                  c.cfg.ClientID,
 		"enabled":                   true,
 		"publicClient":              true,
 		"directAccessGrantsEnabled": true,
 		"standardFlowEnabled":       true,
-		"redirectUris":              []string{"*"},
-		"webOrigins":                []string{"*"},
+		"redirectUris":              redirectURIs,
+		"webOrigins":                webOrigins,
 	}
 
 	if len(clients) == 0 {
@@ -684,14 +699,45 @@ func (c *Client) ListSessions(ctx context.Context, userID string) ([]*domain.Ses
 	return sessions, nil
 }
 
-// RevokeSession revokes a specific session.
-func (c *Client) RevokeSession(ctx context.Context, sessionID string) error {
+// RevokeSession revokes a specific session after verifying it belongs to userID.
+func (c *Client) RevokeSession(ctx context.Context, userID, sessionID string) error {
 	tok, err := c.adminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("revoke session: admin token: %w", err)
 	}
 
 	base := strings.TrimRight(c.cfg.BaseURL, "/")
+
+	// Verify ownership: list the user's sessions and confirm sessionID is among them.
+	sessionsURL := fmt.Sprintf("%s/admin/realms/%s/users/%s/sessions", base, c.cfg.Realm, userID)
+	checkReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, sessionsURL, nil)
+	checkReq.Header.Set("Authorization", "Bearer "+tok)
+	checkResp, err := c.http.Do(checkReq)
+	if err != nil {
+		return fmt.Errorf("revoke session: list user sessions: %w", err)
+	}
+	checkBody, _ := io.ReadAll(checkResp.Body)
+	checkResp.Body.Close()
+	if checkResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("revoke session: list user sessions: status %d", checkResp.StatusCode)
+	}
+	var userSessions []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(checkBody, &userSessions); err != nil {
+		return fmt.Errorf("revoke session: decode user sessions: %w", err)
+	}
+	owned := false
+	for _, s := range userSessions {
+		if s.ID == sessionID {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		return &domain.ErrUnauthorized{Msg: "session does not belong to user"}
+	}
+
 	deleteURL := fmt.Sprintf("%s/admin/realms/%s/sessions/%s", base, c.cfg.Realm, sessionID)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
